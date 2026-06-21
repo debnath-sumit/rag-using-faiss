@@ -13,6 +13,24 @@ load_dotenv()
 
 st.set_page_config(page_title="RAG Document Assistant", layout="wide")
 
+# Resolve the Google API key from env (.env locally) or Streamlit secrets (cloud).
+google_api_key = os.getenv("GOOGLE_API_KEY")
+if not google_api_key:
+    try:
+        google_api_key = st.secrets["GOOGLE_API_KEY"]
+    except Exception:
+        google_api_key = None
+
+if not google_api_key:
+    st.error(
+        "GOOGLE_API_KEY is not set. On Streamlit Cloud, add it under "
+        "Manage app → Settings → Secrets:\n\n"
+        'GOOGLE_API_KEY = "your-key"'
+    )
+    st.stop()
+
+os.environ["GOOGLE_API_KEY"] = google_api_key
+
 st.title("📄 RAG Document Assistant")
 st.write("Ask questions from your PDF and TXT files.")
 
@@ -55,7 +73,8 @@ splitter = CharacterTextSplitter(
 )
 
 embeddings = GoogleGenerativeAIEmbeddings(
-    model="models/gemini-embedding-001"
+    model="models/gemini-embedding-001",
+    google_api_key=google_api_key
 )
 
 
@@ -88,7 +107,8 @@ def build_rag_pipeline():
 
     llm = ChatGoogleGenerativeAI(
         model="gemini-2.5-flash-lite",
-        temperature=0.3
+        temperature=0.3,
+        google_api_key=google_api_key
     )
 
     prompt = ChatPromptTemplate.from_messages([
