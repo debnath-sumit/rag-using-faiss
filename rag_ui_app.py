@@ -3,7 +3,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
-from langchain_community.document_loaders import PyPDFLoader, TextLoader
+from langchain_community.document_loaders import PyPDFLoader, TextLoader, Docx2txtLoader
 from langchain_text_splitters import CharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import ChatPromptTemplate
@@ -45,6 +45,8 @@ def load_single_file(file_path, file_name):
         loader = PyPDFLoader(file_path)
     elif file_name.endswith(".txt"):
         loader = TextLoader(file_path)
+    elif file_name.endswith(".docx"):
+        loader = Docx2txtLoader(file_path)
     else:
         return []
 
@@ -169,7 +171,7 @@ if st.session_state.is_admin:
 
     uploaded_file = st.sidebar.file_uploader(
         "Upload new document",
-        type=["pdf", "txt"]
+        type=["pdf", "txt", "docx"]
     )
 
 if uploaded_file is not None:

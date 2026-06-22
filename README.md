@@ -1,7 +1,7 @@
 # 📄 RAG Document Assistant
 
 A Retrieval-Augmented Generation (RAG) web app that answers questions from your
-PDF and TXT documents. Built with **Streamlit**, **LangChain**, **FAISS**, and
+PDF, TXT, and DOCX documents. Built with **Streamlit**, **LangChain**, **FAISS**, and
 **Google Gemini**.
 
 🔗 **Live app:** https://rag-using-faiss.streamlit.app/
@@ -14,7 +14,7 @@ PDF and TXT documents. Built with **Streamlit**, **LangChain**, **FAISS**, and
   the uploaded content (no hallucinated answers).
 - **Source-cited answers** — every response shows the source file and page, with
   expandable snippets of the retrieved chunks.
-- **Admin-gated uploads** — only an authenticated admin can add new PDF/TXT
+- **Admin-gated uploads** — only an authenticated admin can add new PDF/TXT/DOCX
   documents to the knowledge base. Regular users can ask questions freely.
 - **Persistent vector index** — documents are embedded once and stored in a
   local FAISS index that is reused on subsequent runs.
@@ -48,11 +48,11 @@ PDF and TXT documents. Built with **Streamlit**, **LangChain**, **FAISS**, and
                           │  • Admin Panel (login-gated)│
                           └───────┬───────────┬─────────┘
                                   │           │
-              ask question        │           │  admin uploads PDF/TXT
+              ask question        │           │  admin uploads PDF/TXT/DOCX
                                   ▼           ▼
                   ┌──────────────────┐   ┌─────────────────────────┐
                   │  Retriever       │   │  Document loader         │
-                  │  (FAISS top-k)   │   │  PyPDFLoader/TextLoader  │
+                  │  (FAISS top-k)   │   │  PyPDF/Text/Docx2txt  │
                   └────────┬─────────┘   └────────────┬────────────┘
                            │                          │ split into chunks
                            │                          ▼
@@ -83,7 +83,7 @@ PDF and TXT documents. Built with **Streamlit**, **LangChain**, **FAISS**, and
 
 ### Pipeline flow
 
-1. **Ingestion** — PDF/TXT files in `information_storage/` are loaded
+1. **Ingestion** — PDF/TXT/DOCX files in `information_storage/` are loaded
    (`PyPDFLoader` / `TextLoader`) and tagged with their source filename.
 2. **Chunking** — documents are split into overlapping chunks with
    `CharacterTextSplitter` (1000 chars, 100 overlap).
@@ -110,7 +110,7 @@ PDF and TXT documents. Built with **Streamlit**, **LangChain**, **FAISS**, and
 | Embeddings | Google `gemini-embedding-001` |
 | LLM | Google `gemini-2.5-flash-lite` |
 | Vector store | FAISS (CPU) |
-| Document loaders | PyPDFLoader, TextLoader |
+| Document loaders | PyPDFLoader, TextLoader, Docx2txtLoader |
 | Hosting | Streamlit Community Cloud |
 
 ---
@@ -162,7 +162,7 @@ Get a free Google API key at https://aistudio.google.com/apikey.
 rag-using-faiss/
 ├── rag_ui_app.py          # Main Streamlit app (deployed)
 ├── rag_txt_app.py         # CLI version (terminal Q&A loop)
-├── information_storage/    # Source PDF/TXT documents
+├── information_storage/    # Source PDF/TXT/DOCX documents
 ├── faiss_index/            # Generated FAISS vector index (git-ignored)
 ├── requirements.txt        # pip dependencies
 ├── pyproject.toml          # uv/project dependencies
