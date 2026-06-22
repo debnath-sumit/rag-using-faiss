@@ -264,11 +264,15 @@ if st.button("Ask", disabled=not rag_ready):
 
         context = "\n\n".join(context_parts)
 
-        with st.spinner("Thinking..."):
-            response = chain.invoke({
-                "context": context,
-                "question": question
-            })
+        try:
+            with st.spinner("Thinking..."):
+                response = chain.invoke({
+                    "context": context,
+                    "question": question
+                })
+        except Exception as e:
+            st.error(f"The model call failed: {e}")
+            st.stop()
 
         st.subheader("Answer")
         st.write(response)
