@@ -1,117 +1,82 @@
 import os
-import shutil
 import streamlit as st
 from dotenv import load_dotenv
 
-from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
-from langchain_community.document_loaders import PyPDFLoader, TextLoader, Docx2txtLoader
-from langchain_text_splitters import CharacterTextSplitter
-from langchain_community.vectorstores import FAISS
+from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+
+from rag_core import (
+    FAISS_INDEX_PATH,
+    FOLDER_PATH,
+    chunk_ids_for_file,
+    file_hash,
+    get_embeddings,
+    get_splitter,
+    list_source_files,
+    load_manifest,
+    load_single_file,
+    load_vectorstore,
+    save_manifest,
+)
 
 load_dotenv()
 
 st.set_page_config(page_title="RAG Document Assistant", layout="wide")
 
-# Resolve the Google API key from env (.env locally) or Streamlit secrets (cloud).
-google_api_key = os.getenv("GOOGLE_API_KEY")
-if not google_api_key:
+# Chat answers run on Groq (free tier, fast). Embeddings are local, so no
+# Google key is needed anymore.
+groq_api_key = os.getenv("GROQ_API_KEY")
+if not groq_api_key:
     try:
-        google_api_key = st.secrets["GOOGLE_API_KEY"]
+        groq_api_key = st.secrets["GROQ_API_KEY"]
     except Exception:
-        google_api_key = None
+        groq_api_key = None
 
-if not google_api_key:
+if not groq_api_key:
     st.error(
-        "GOOGLE_API_KEY is not set. On Streamlit Cloud, add it under "
-        "Manage app → Settings → Secrets:\n\n"
-        'GOOGLE_API_KEY = "your-key"'
+        "GROQ_API_KEY is not set. Get a free key at https://console.groq.com "
+        "and add it.\n\nOn Streamlit Cloud: Manage app → Settings → Secrets:\n\n"
+        'GROQ_API_KEY = "your-key"'
     )
     st.stop()
 
-os.environ["GOOGLE_API_KEY"] = google_api_key
+os.environ["GROQ_API_KEY"] = groq_api_key
 
 st.title("📄 RAG Document Assistant")
-st.write("Ask questions from your PDF and TXT files.")
+st.write("Ask questions from your PDF, TXT, and DOCX files.")
 
-folder_path = "information_storage"
-faiss_index_path = "faiss_index"
+os.makedirs(FOLDER_PATH, exist_ok=True)
 
-os.makedirs(folder_path, exist_ok=True)
-
-
-def load_single_file(file_path, file_name):
-    if file_name.endswith(".pdf"):
-        loader = PyPDFLoader(file_path)
-    elif file_name.endswith(".txt"):
-        loader = TextLoader(file_path)
-    elif file_name.endswith(".docx"):
-        loader = Docx2txtLoader(file_path)
-    else:
-        return []
-
-    docs = loader.load()
-
-    for doc in docs:
-        doc.metadata["source_file"] = file_name
-
-    return docs
+splitter = get_splitter()
 
 
-def load_all_documents():
-    documents = []
-
-    for file_name in os.listdir(folder_path):
-        full_path = os.path.join(folder_path, file_name)
-        docs = load_single_file(full_path, file_name)
-        documents.extend(docs)
-
-    return documents
+@st.cache_resource
+def get_embedder():
+    # Loaded once per app process; used to embed the query (and admin uploads).
+    return get_embeddings()
 
 
-splitter = CharacterTextSplitter(
-    chunk_size=1000,
-    chunk_overlap=100
-)
-
-embeddings = GoogleGenerativeAIEmbeddings(
-    model="models/gemini-embedding-001",
-    google_api_key=google_api_key
-)
+embeddings = get_embedder()
 
 
 @st.cache_resource
 def build_rag_pipeline():
-    if os.path.exists(faiss_index_path):
-        vectorstore = FAISS.load_local(
-            faiss_index_path,
-            embeddings,
-            allow_dangerous_deserialization=True
-        )
+    """Load the prebuilt FAISS index read-only and wire up the Groq chain.
 
-        documents = load_all_documents()
-        chunks = splitter.split_documents(documents)
+    The heavy lifting (embedding the whole corpus) happens offline in
+    `ingest.py`; here we only load what's already built.
+    """
+    vectorstore = load_vectorstore(embeddings)
+    if vectorstore is None:
+        raise ValueError("No FAISS index found. Run `python ingest.py` first.")
 
-    else:
-        documents = load_all_documents()
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
 
-        if not documents:
-            raise ValueError("No PDF or TXT files found in information_storage folder.")
-
-        chunks = splitter.split_documents(documents)
-
-        vectorstore = FAISS.from_documents(chunks, embeddings)
-        vectorstore.save_local(faiss_index_path)
-
-    retriever = vectorstore.as_retriever(
-        search_kwargs={"k": 4}
-    )
-
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash-lite",
+    llm = ChatGroq(
+        model="llama-3.3-70b-versatile",
         temperature=0.3,
-        google_api_key=google_api_key
+        api_key=groq_api_key,
     )
 
     prompt = ChatPromptTemplate.from_messages([
@@ -134,17 +99,21 @@ Context:
     parser = StrOutputParser()
     chain = prompt | llm | parser
 
-    return vectorstore, retriever, chain, len(documents), len(chunks)
+    return vectorstore, retriever, chain
 
 
 try:
-    vectorstore, retriever, chain, doc_count, chunk_count = build_rag_pipeline()
+    vectorstore, retriever, chain = build_rag_pipeline()
     rag_ready = True
 except ValueError:
-    # No documents indexed yet (e.g. admin deleted the last file).
+    # No index built yet (e.g. fresh deploy, or admin deleted the last file).
     vectorstore = retriever = chain = None
-    doc_count = chunk_count = 0
     rag_ready = False
+
+# Counts come from the manifest — cheap, no re-reading documents.
+manifest = load_manifest()
+file_count = len(manifest)
+chunk_count = sum(len(entry.get("ids", [])) for entry in manifest.values())
 
 st.sidebar.header("Admin Panel")
 
@@ -177,41 +146,58 @@ if st.session_state.is_admin:
         st.session_state.is_admin = False
         st.rerun()
 
+    st.sidebar.caption(
+        "Uploads here are indexed locally with no API cost. Note: on Streamlit "
+        "Cloud these changes are temporary (ephemeral disk). For durable "
+        "changes, run `python ingest.py` locally and commit `faiss_index/`."
+    )
+
     uploaded_file = st.sidebar.file_uploader(
         "Upload new document",
         type=["pdf", "txt", "docx"]
     )
 
 if uploaded_file is not None:
-    save_path = os.path.join(folder_path, uploaded_file.name)
+    save_path = os.path.join(FOLDER_PATH, uploaded_file.name)
 
     with open(save_path, "wb") as f:
         f.write(uploaded_file.getbuffer())
 
-    if vectorstore is None:
-        # No index yet (first document) — let the pipeline build it from scratch.
-        if os.path.exists(faiss_index_path):
-            shutil.rmtree(faiss_index_path)
+    new_docs = load_single_file(save_path, uploaded_file.name)
+    new_chunks = splitter.split_documents(new_docs)
+
+    if not new_chunks:
+        st.sidebar.error("No extractable text in that file — nothing indexed.")
     else:
-        new_docs = load_single_file(save_path, uploaded_file.name)
-        new_chunks = splitter.split_documents(new_docs)
+        ids = chunk_ids_for_file(uploaded_file.name, new_chunks)
 
-        vectorstore.add_documents(new_chunks)
-        vectorstore.save_local(faiss_index_path)
+        with st.spinner("Embedding and indexing..."):
+            if vectorstore is None:
+                from langchain_community.vectorstores import FAISS
+                vectorstore = FAISS.from_documents(new_chunks, embeddings, ids=ids)
+            else:
+                # Re-upload of an existing file: drop old vectors first.
+                old = manifest.get(uploaded_file.name)
+                if old:
+                    vectorstore.delete(ids=old["ids"])
+                vectorstore.add_documents(new_chunks, ids=ids)
 
-    st.cache_resource.clear()
+            manifest[uploaded_file.name] = {
+                "hash": file_hash(save_path),
+                "ids": ids,
+            }
+            vectorstore.save_local(FAISS_INDEX_PATH)
+            save_manifest(manifest)
 
-    st.sidebar.success(f"{uploaded_file.name} uploaded and indexed.")
-    st.rerun()
+        st.cache_resource.clear()
+        st.sidebar.success(f"{uploaded_file.name} uploaded and indexed.")
+        st.rerun()
 
 
 if st.session_state.is_admin:
     st.sidebar.subheader("Delete a document")
 
-    existing_files = sorted(
-        f for f in os.listdir(folder_path)
-        if f.endswith((".pdf", ".txt", ".docx"))
-    )
+    existing_files = list_source_files()
 
     if not existing_files:
         st.sidebar.info("No documents to delete.")
@@ -222,27 +208,35 @@ if st.session_state.is_admin:
         )
 
         if st.sidebar.button("Delete selected document"):
-            os.remove(os.path.join(folder_path, file_to_delete))
+            path = os.path.join(FOLDER_PATH, file_to_delete)
+            if os.path.exists(path):
+                os.remove(path)
 
-            # Removing a file from disk does not remove its vectors, so
-            # rebuild the FAISS index from the remaining documents.
-            if os.path.exists(faiss_index_path):
-                shutil.rmtree(faiss_index_path)
+            # Surgically remove just this file's vectors — no full re-embed.
+            entry = manifest.get(file_to_delete)
+            if entry and vectorstore is not None:
+                vectorstore.delete(ids=entry["ids"])
+                vectorstore.save_local(FAISS_INDEX_PATH)
+            if entry:
+                del manifest[file_to_delete]
+                save_manifest(manifest)
 
             st.cache_resource.clear()
-
-            st.sidebar.success(f"{file_to_delete} deleted. Index will rebuild.")
+            st.sidebar.success(f"{file_to_delete} deleted from the index.")
             st.rerun()
 
 
 st.sidebar.header("Document Info")
-st.sidebar.write(f"Documents/pages loaded: {doc_count}")
-st.sidebar.write(f"Chunks created: {chunk_count}")
-st.sidebar.write(f"Folder: `{folder_path}`")
-st.sidebar.write(f"FAISS index: `{faiss_index_path}`")
+st.sidebar.write(f"Files indexed: {file_count}")
+st.sidebar.write(f"Chunks indexed: {chunk_count}")
+st.sidebar.write(f"Folder: `{FOLDER_PATH}`")
+st.sidebar.write(f"FAISS index: `{FAISS_INDEX_PATH}`")
 
 if not rag_ready:
-    st.warning("No documents are indexed yet. An admin needs to upload a document first.")
+    st.warning(
+        "No documents are indexed yet. Run `python ingest.py` locally (and "
+        "commit `faiss_index/`), or log in as admin and upload a document."
+    )
 
 question = st.text_input("Ask a question:", disabled=not rag_ready)
 

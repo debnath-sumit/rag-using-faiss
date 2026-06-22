@@ -1,8 +1,12 @@
 # 📄 RAG Document Assistant
 
 A Retrieval-Augmented Generation (RAG) web app that answers questions from your
-PDF, TXT, and DOCX documents. Built with **Streamlit**, **LangChain**, **FAISS**, and
-**Google Gemini**.
+PDF, TXT, and DOCX documents. Built with **Streamlit**, **LangChain**, **FAISS**,
+local **HuggingFace embeddings**, and **Groq** (Llama 3.3 70B).
+
+Embeddings run **locally** (no API, no rate limits), and the corpus is embedded
+**offline** so the deployed app only loads a prebuilt index — this is what makes
+it scale to many documents at zero cost.
 
 🔗 **Live app:** https://rag-using-faiss.streamlit.app/
 
@@ -17,8 +21,12 @@ PDF, TXT, and DOCX documents. Built with **Streamlit**, **LangChain**, **FAISS**
 - **Admin-gated uploads & deletes** — only an authenticated admin can add or
   remove PDF/TXT/DOCX documents in the knowledge base. Regular users can ask
   questions freely.
-- **Persistent vector index** — documents are embedded once and stored in a
-  local FAISS index that is reused on subsequent runs.
+- **Offline ingestion, scales cheaply** — embed the whole corpus once with
+  `python ingest.py` (local model, no API cost), commit the FAISS index, and the
+  deployed app just loads it. Incremental: unchanged files are skipped, changed
+  files re-embedded, deleted files removed — no full re-embed.
+- **Committed vector index** — `faiss_index/` is checked into the repo so it
+  survives Streamlit Cloud's ephemeral-disk redeploys.
 
 ---
 
@@ -37,70 +45,63 @@ PDF, TXT, and DOCX documents. Built with **Streamlit**, **LangChain**, **FAISS**
 ## 🏗️ Architecture
 
 ```
-                          ┌────────────────────────────┐
-                          │        User (browser)       │
-                          └─────────────┬──────────────┘
-                                        │  questions / admin upload
-                                        ▼
-                          ┌────────────────────────────┐
-                          │     Streamlit UI            │
-                          │     (rag_ui_app.py)         │
-                          │  • Q&A box (public)         │
-                          │  • Admin Panel (login-gated)│
-                          └───────┬───────────┬─────────┘
-                                  │           │
-              ask question        │           │  admin uploads PDF/TXT/DOCX
-                                  ▼           ▼
-                  ┌──────────────────┐   ┌─────────────────────────┐
-                  │  Retriever       │   │  Document loader         │
-                  │  (FAISS top-k)   │   │  PyPDF/Text/Docx2txt  │
-                  └────────┬─────────┘   └────────────┬────────────┘
-                           │                          │ split into chunks
-                           │                          ▼
-                           │             ┌─────────────────────────┐
-                           │             │ CharacterTextSplitter    │
-                           │             └────────────┬────────────┘
-                           │                          │ embed
-                           ▼                          ▼
-                  ┌─────────────────────────────────────────────────┐
-                  │   Google Generative AI Embeddings                │
-                  │   (models/gemini-embedding-001)                  │
-                  └────────────────────────┬────────────────────────┘
-                                           ▼
-                              ┌──────────────────────────┐
-                              │   FAISS vector store      │
-                              │   (faiss_index/)          │
-                              └────────────┬─────────────┘
-                                           │ retrieved context
-                                           ▼
-                              ┌──────────────────────────┐
-                              │   Gemini LLM              │
-                              │   (gemini-2.5-flash-lite) │
-                              │   prompt → answer          │
-                              └────────────┬─────────────┘
-                                           ▼
-                              answer + cited sources → user
+   OFFLINE (you, on your machine)              ONLINE (deployed app)
+   ────────────────────────────────            ─────────────────────────────
+
+   information_storage/*.pdf/.txt/.docx          ┌────────────────────────┐
+                │                                 │     User (browser)     │
+                ▼                                 └───────────┬────────────┘
+   ┌──────────────────────────┐                              │ question
+   │  ingest.py               │                              ▼
+   │  • load + chunk          │                  ┌────────────────────────┐
+   │    (Recursive splitter)  │                  │   Streamlit UI         │
+   │  • embed LOCALLY         │                  │   (rag_ui_app.py)      │
+   │    (bge-small-en-v1.5)   │                  │  • Q&A box (public)    │
+   │  • manifest: skip/update │                  │  • Admin Panel (gated) │
+   └────────────┬─────────────┘                  └───────────┬────────────┘
+                │ save_local                       embed query │ (bge-small)
+                ▼                                               ▼
+   ┌──────────────────────────┐   git commit     ┌────────────────────────┐
+   │   FAISS index            │ ───────────────▶ │   Retriever (top-k)    │
+   │   faiss_index/           │                  └───────────┬────────────┘
+   │   + manifest.json        │                              │ context
+   └──────────────────────────┘                              ▼
+                                                  ┌────────────────────────┐
+                                                  │   Groq LLM             │
+                                                  │   llama-3.3-70b        │
+                                                  │   prompt → answer      │
+                                                  └───────────┬────────────┘
+                                                              ▼
+                                                  answer + cited sources → user
 ```
 
 ### Pipeline flow
 
+**Offline (run `python ingest.py` locally, then commit `faiss_index/`):**
+
 1. **Ingestion** — PDF/TXT/DOCX files in `information_storage/` are loaded
-   (`PyPDFLoader` / `TextLoader`) and tagged with their source filename.
-2. **Chunking** — documents are split into overlapping chunks with
-   `CharacterTextSplitter` (1000 chars, 100 overlap).
-3. **Embedding** — chunks are converted to vectors via Google's
-   `gemini-embedding-001`.
-4. **Indexing** — vectors are stored in a **FAISS** index (`faiss_index/`),
-   built once and reloaded on later runs.
-5. **Retrieval** — at query time the retriever fetches the top-4 most relevant
-   chunks.
-6. **Generation** — the chunks + question are sent to **Gemini
-   2.5 Flash Lite**, which answers strictly from the provided context and cites
-   sources.
-7. **Admin upload / delete** — an authenticated admin can upload a new file
-   (saved, embedded, and added to the live FAISS index) or delete an existing
-   one (the file is removed and the FAISS index is rebuilt from the remaining
-   documents).
+   (`PyPDFLoader` / `TextLoader` / `Docx2txtLoader`) and tagged with their
+   source filename.
+2. **Chunking** — documents are split with `RecursiveCharacterTextSplitter`
+   (1000 chars, 100 overlap).
+3. **Embedding** — chunks are embedded **locally** with HuggingFace
+   `BAAI/bge-small-en-v1.5` — no API calls, no rate limits, no cost.
+4. **Indexing** — vectors are stored in a **FAISS** index (`faiss_index/`)
+   alongside a `manifest.json` that tracks each file's content hash and vector
+   IDs. Re-running ingestion skips unchanged files, re-embeds changed ones, and
+   drops vectors for deleted files — never a full re-embed.
+
+**Online (the deployed app):**
+
+5. **Load** — the app loads the prebuilt FAISS index read-only; the only thing
+   it embeds at runtime is the user's question (one tiny, fast call).
+6. **Retrieval** — the retriever fetches the top-4 most relevant chunks.
+7. **Generation** — chunks + question go to **Groq Llama 3.3 70B**, which
+   answers strictly from the provided context and cites sources.
+8. **Admin upload / delete** — an authenticated admin can upload a file (embedded
+   locally and added to the index under stable IDs) or delete one (its vectors
+   are removed surgically by ID — no rebuild). On Streamlit Cloud these runtime
+   changes are temporary; for durable changes, re-run `ingest.py` and commit.
 
 ---
 
@@ -110,8 +111,8 @@ PDF, TXT, and DOCX documents. Built with **Streamlit**, **LangChain**, **FAISS**
 |---|---|
 | UI | Streamlit |
 | Orchestration | LangChain |
-| Embeddings | Google `gemini-embedding-001` |
-| LLM | Google `gemini-2.5-flash-lite` |
+| Embeddings | HuggingFace `BAAI/bge-small-en-v1.5` (local, via sentence-transformers) |
+| LLM | Groq `llama-3.3-70b-versatile` |
 | Vector store | FAISS (CPU) |
 | Document loaders | PyPDFLoader, TextLoader, Docx2txtLoader |
 | Hosting | Streamlit Community Cloud |
@@ -130,14 +131,21 @@ uv sync
 # ...or with pip:
 pip install -r requirements.txt
 
-# 3. Set your Google API key
-echo 'GOOGLE_API_KEY=your-key-here' > .env
+# 3. Set your Groq API key (embeddings are local — no other key needed)
+echo 'GROQ_API_KEY=your-key-here' > .env
 
-# 4. Run
+# 4. Build the index (first run downloads the ~130MB embedding model)
+python ingest.py            # incremental; use --rebuild to start fresh
+
+# 5. Run
 streamlit run rag_ui_app.py
 ```
 
-Get a free Google API key at https://aistudio.google.com/apikey.
+Get a free Groq API key at https://console.groq.com.
+
+> **Adding documents:** drop files into `information_storage/`, run
+> `python ingest.py` (only new/changed files are embedded), then commit the
+> updated `faiss_index/`.
 
 ---
 
@@ -148,14 +156,18 @@ Get a free Google API key at https://aistudio.google.com/apikey.
    `rag_ui_app.py` on the `main` branch.
 3. In **Manage app → Settings → Secrets**, add:
    ```toml
-   GOOGLE_API_KEY = "your-key"
+   GROQ_API_KEY = "your-key"
    ```
 4. Deploy.
 
-> ⚠️ **Note:** Streamlit Cloud's filesystem is ephemeral, so documents uploaded
-> through the Admin Panel (and changes to the FAISS index) may not persist across
-> app restarts. For durable uploads, back the storage with an external service
-> (e.g. S3/GCS).
+> ✅ **Durable index:** because `faiss_index/` is committed to the repo, the
+> deployed app loads the prebuilt index on every redeploy — no re-embedding, no
+> data loss. To update the knowledge base, run `python ingest.py` locally and
+> push the updated `faiss_index/`.
+>
+> ⚠️ **Note:** documents uploaded through the Admin Panel at runtime still live
+> on Streamlit Cloud's ephemeral disk and won't persist across restarts. The
+> durable path is the offline `ingest.py` + commit workflow above.
 
 ---
 
@@ -163,10 +175,12 @@ Get a free Google API key at https://aistudio.google.com/apikey.
 
 ```
 rag-using-faiss/
-├── rag_ui_app.py          # Main Streamlit app (deployed)
+├── rag_ui_app.py          # Main Streamlit app (deployed) — loads index, serves Q&A
+├── ingest.py              # Offline ingester — builds/updates faiss_index/
+├── rag_core.py            # Shared building blocks (embeddings, loaders, manifest)
 ├── rag_txt_app.py         # CLI version (terminal Q&A loop)
 ├── information_storage/    # Source PDF/TXT/DOCX documents
-├── faiss_index/            # Generated FAISS vector index (git-ignored)
+├── faiss_index/            # Prebuilt FAISS index + manifest.json (committed)
 ├── requirements.txt        # pip dependencies
 ├── pyproject.toml          # uv/project dependencies
 └── README.md
