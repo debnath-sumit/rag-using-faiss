@@ -1,4 +1,5 @@
 import os
+import shutil
 import streamlit as st
 from dotenv import load_dotenv
 
@@ -136,7 +137,14 @@ Context:
     return vectorstore, retriever, chain, len(documents), len(chunks)
 
 
-vectorstore, retriever, chain, doc_count, chunk_count = build_rag_pipeline()
+try:
+    vectorstore, retriever, chain, doc_count, chunk_count = build_rag_pipeline()
+    rag_ready = True
+except ValueError:
+    # No documents indexed yet (e.g. admin deleted the last file).
+    vectorstore = retriever = chain = None
+    doc_count = chunk_count = 0
+    rag_ready = False
 
 st.sidebar.header("Admin Panel")
 
@@ -180,16 +188,51 @@ if uploaded_file is not None:
     with open(save_path, "wb") as f:
         f.write(uploaded_file.getbuffer())
 
-    new_docs = load_single_file(save_path, uploaded_file.name)
-    new_chunks = splitter.split_documents(new_docs)
+    if vectorstore is None:
+        # No index yet (first document) — let the pipeline build it from scratch.
+        if os.path.exists(faiss_index_path):
+            shutil.rmtree(faiss_index_path)
+    else:
+        new_docs = load_single_file(save_path, uploaded_file.name)
+        new_chunks = splitter.split_documents(new_docs)
 
-    vectorstore.add_documents(new_chunks)
-    vectorstore.save_local(faiss_index_path)
+        vectorstore.add_documents(new_chunks)
+        vectorstore.save_local(faiss_index_path)
 
     st.cache_resource.clear()
 
     st.sidebar.success(f"{uploaded_file.name} uploaded and indexed.")
     st.rerun()
+
+
+if st.session_state.is_admin:
+    st.sidebar.subheader("Delete a document")
+
+    existing_files = sorted(
+        f for f in os.listdir(folder_path)
+        if f.endswith((".pdf", ".txt", ".docx"))
+    )
+
+    if not existing_files:
+        st.sidebar.info("No documents to delete.")
+    else:
+        file_to_delete = st.sidebar.selectbox(
+            "Select a file to delete",
+            existing_files
+        )
+
+        if st.sidebar.button("Delete selected document"):
+            os.remove(os.path.join(folder_path, file_to_delete))
+
+            # Removing a file from disk does not remove its vectors, so
+            # rebuild the FAISS index from the remaining documents.
+            if os.path.exists(faiss_index_path):
+                shutil.rmtree(faiss_index_path)
+
+            st.cache_resource.clear()
+
+            st.sidebar.success(f"{file_to_delete} deleted. Index will rebuild.")
+            st.rerun()
 
 
 st.sidebar.header("Document Info")
@@ -198,9 +241,12 @@ st.sidebar.write(f"Chunks created: {chunk_count}")
 st.sidebar.write(f"Folder: `{folder_path}`")
 st.sidebar.write(f"FAISS index: `{faiss_index_path}`")
 
-question = st.text_input("Ask a question:")
+if not rag_ready:
+    st.warning("No documents are indexed yet. An admin needs to upload a document first.")
 
-if st.button("Ask"):
+question = st.text_input("Ask a question:", disabled=not rag_ready)
+
+if st.button("Ask", disabled=not rag_ready):
     if not question.strip():
         st.warning("Please enter a question.")
     else:

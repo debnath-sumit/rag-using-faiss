@@ -14,8 +14,9 @@ PDF, TXT, and DOCX documents. Built with **Streamlit**, **LangChain**, **FAISS**
   the uploaded content (no hallucinated answers).
 - **Source-cited answers** — every response shows the source file and page, with
   expandable snippets of the retrieved chunks.
-- **Admin-gated uploads** — only an authenticated admin can add new PDF/TXT/DOCX
-  documents to the knowledge base. Regular users can ask questions freely.
+- **Admin-gated uploads & deletes** — only an authenticated admin can add or
+  remove PDF/TXT/DOCX documents in the knowledge base. Regular users can ask
+  questions freely.
 - **Persistent vector index** — documents are embedded once and stored in a
   local FAISS index that is reused on subsequent runs.
 
@@ -26,7 +27,7 @@ PDF, TXT, and DOCX documents. Built with **Streamlit**, **LangChain**, **FAISS**
 | Action | Login required? | Credentials |
 |---|---|---|
 | Ask questions | ❌ No | — anyone can use it |
-| Upload new documents | ✅ Yes (admin only) | **Username:** `rag_admin` · **Password:** `rag_password_12#` |
+| Upload / delete documents | ✅ Yes (admin only) | **Username:** `rag_admin` · **Password:** `rag_password_12#` |
 
 > To upload, open the **Admin Panel** in the left sidebar, log in with the admin
 > credentials above, and the file uploader will appear.
@@ -96,8 +97,10 @@ PDF, TXT, and DOCX documents. Built with **Streamlit**, **LangChain**, **FAISS**
 6. **Generation** — the chunks + question are sent to **Gemini
    2.5 Flash Lite**, which answers strictly from the provided context and cites
    sources.
-7. **Admin upload** — an authenticated admin can upload a new file; it is saved,
-   embedded, added to the live FAISS index, and the cache is refreshed.
+7. **Admin upload / delete** — an authenticated admin can upload a new file
+   (saved, embedded, and added to the live FAISS index) or delete an existing
+   one (the file is removed and the FAISS index is rebuilt from the remaining
+   documents).
 
 ---
 
