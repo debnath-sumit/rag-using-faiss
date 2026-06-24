@@ -11,7 +11,8 @@ dependencies = [
     "langchain-community>=0.3.0",
     "langchain-text-splitters>=0.3.0",
     "langchain-core>=0.3.0",
-    "faiss-cpu>=1.9.0",
+    "langchain-chroma>=0.2.0",
     "pypdf>=5.0.0",
     "docx2txt>=0.8",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.42.1",
 ]

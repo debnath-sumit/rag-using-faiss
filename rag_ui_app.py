@@ -7,12 +7,13 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
 from rag_core import (
-    FAISS_INDEX_PATH,
+    CHROMA_PATH,
     FOLDER_PATH,
     chunk_ids_for_file,
     file_hash,
     get_embeddings,
     get_splitter,
+    get_vectorstore,
     list_source_files,
     load_manifest,
     load_single_file,
@@ -62,14 +63,14 @@ embeddings = get_embedder()
 
 @st.cache_resource
 def build_rag_pipeline():
-    """Load the prebuilt FAISS index read-only and wire up the Groq chain.
+    """Load the prebuilt Chroma index read-only and wire up the Groq chain.
 
     The heavy lifting (embedding the whole corpus) happens offline in
     `ingest.py`; here we only load what's already built.
     """
     vectorstore = load_vectorstore(embeddings)
     if vectorstore is None:
-        raise ValueError("No FAISS index found. Run `python ingest.py` first.")
+        raise ValueError("No Chroma index found. Run `python ingest.py` first.")
 
     retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
 
@@ -149,7 +150,7 @@ if st.session_state.is_admin:
     st.sidebar.caption(
         "Uploads here are indexed locally with no API cost. Note: on Streamlit "
         "Cloud these changes are temporary (ephemeral disk). For durable "
-        "changes, run `python ingest.py` locally and commit `faiss_index/`."
+        "changes, run `python ingest.py` locally and commit `chroma_db/`."
     )
 
     uploaded_file = st.sidebar.file_uploader(
@@ -173,20 +174,19 @@ if uploaded_file is not None:
 
         with st.spinner("Embedding and indexing..."):
             if vectorstore is None:
-                from langchain_community.vectorstores import FAISS
-                vectorstore = FAISS.from_documents(new_chunks, embeddings, ids=ids)
+                vectorstore = get_vectorstore(embeddings)
             else:
                 # Re-upload of an existing file: drop old vectors first.
                 old = manifest.get(uploaded_file.name)
                 if old:
                     vectorstore.delete(ids=old["ids"])
-                vectorstore.add_documents(new_chunks, ids=ids)
+            vectorstore.add_documents(new_chunks, ids=ids)
 
             manifest[uploaded_file.name] = {
                 "hash": file_hash(save_path),
                 "ids": ids,
             }
-            vectorstore.save_local(FAISS_INDEX_PATH)
+            # Chroma persists on write; only the manifest needs an explicit save.
             save_manifest(manifest)
 
         st.cache_resource.clear()
@@ -216,7 +216,6 @@ if st.session_state.is_admin:
             entry = manifest.get(file_to_delete)
             if entry and vectorstore is not None:
                 vectorstore.delete(ids=entry["ids"])
-                vectorstore.save_local(FAISS_INDEX_PATH)
             if entry:
                 del manifest[file_to_delete]
                 save_manifest(manifest)
@@ -230,12 +229,12 @@ st.sidebar.header("Document Info")
 st.sidebar.write(f"Files indexed: {file_count}")
 st.sidebar.write(f"Chunks indexed: {chunk_count}")
 st.sidebar.write(f"Folder: `{FOLDER_PATH}`")
-st.sidebar.write(f"FAISS index: `{FAISS_INDEX_PATH}`")
+st.sidebar.write(f"Chroma index: `{CHROMA_PATH}`")
 
 if not rag_ready:
     st.warning(
         "No documents are indexed yet. Run `python ingest.py` locally (and "
-        "commit `faiss_index/`), or log in as admin and upload a document."
+        "commit `chroma_db/`), or log in as admin and upload a document."
     )
 
 question = st.text_input("Ask a question:", disabled=not rag_ready)

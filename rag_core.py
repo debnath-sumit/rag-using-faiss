@@ -8,18 +8,19 @@ import hashlib
 import json
 import os
 
+from langchain_chroma import Chroma
 from langchain_community.document_loaders import (
     Docx2txtLoader,
     PyPDFLoader,
     TextLoader,
 )
-from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 FOLDER_PATH = "information_storage"
-FAISS_INDEX_PATH = "faiss_index"
-MANIFEST_PATH = os.path.join(FAISS_INDEX_PATH, "manifest.json")
+CHROMA_PATH = "chroma_db"
+COLLECTION_NAME = "documents"
+MANIFEST_PATH = os.path.join(CHROMA_PATH, "manifest.json")
 
 # Local embedding model. Small (~130MB), strong retrieval quality, CPU-friendly.
 EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
@@ -89,18 +90,22 @@ def load_manifest():
 
 
 def save_manifest(manifest):
-    os.makedirs(FAISS_INDEX_PATH, exist_ok=True)
+    os.makedirs(CHROMA_PATH, exist_ok=True)
     with open(MANIFEST_PATH, "w") as f:
         json.dump(manifest, f, indent=2)
 
 
-def load_vectorstore(embeddings):
-    """Load the prebuilt FAISS index, or None if it does not exist yet."""
-    index_file = os.path.join(FAISS_INDEX_PATH, "index.faiss")
-    if not os.path.exists(index_file):
-        return None
-    return FAISS.load_local(
-        FAISS_INDEX_PATH,
-        embeddings,
-        allow_dangerous_deserialization=True,
+def get_vectorstore(embeddings):
+    """Open the persisted Chroma collection (creating it on first write)."""
+    return Chroma(
+        persist_directory=CHROMA_PATH,
+        embedding_function=embeddings,
+        collection_name=COLLECTION_NAME,
     )
+
+
+def load_vectorstore(embeddings):
+    """Load the prebuilt Chroma collection, or None if it does not exist yet."""
+    if not os.path.exists(os.path.join(CHROMA_PATH, "chroma.sqlite3")):
+        return None
+    return get_vectorstore(embeddings)

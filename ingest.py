@@ -1,6 +1,6 @@
-"""Offline ingestion: build/update the FAISS index from `information_storage/`.
+"""Offline ingestion: build/update the Chroma index from `information_storage/`.
 
-Run this locally whenever documents change, then commit `faiss_index/` so the
+Run this locally whenever documents change, then commit `chroma_db/` so the
 deployed app picks up the prebuilt index (Streamlit Cloud disk is ephemeral).
 
     python ingest.py            # incremental: only new/changed/removed files
@@ -14,12 +14,13 @@ import argparse
 import shutil
 
 from rag_core import (
-    FAISS_INDEX_PATH,
+    CHROMA_PATH,
     FOLDER_PATH,
     chunk_ids_for_file,
     file_hash,
     get_embeddings,
     get_splitter,
+    get_vectorstore,
     list_source_files,
     load_manifest,
     load_single_file,
@@ -28,8 +29,6 @@ from rag_core import (
 )
 
 import os
-
-from langchain_community.vectorstores import FAISS
 
 
 def embed_file(vectorstore, embeddings, splitter, file_name, manifest):
@@ -44,16 +43,16 @@ def embed_file(vectorstore, embeddings, splitter, file_name, manifest):
     ids = chunk_ids_for_file(file_name, chunks)
 
     if vectorstore is None:
-        vectorstore = FAISS.from_documents(chunks, embeddings, ids=ids)
-    else:
-        vectorstore.add_documents(chunks, ids=ids)
+        # Open (and thereby create) the persistent collection, then add.
+        vectorstore = get_vectorstore(embeddings)
+    vectorstore.add_documents(chunks, ids=ids)
 
     manifest[file_name] = {"hash": file_hash(full_path), "ids": ids}
     return vectorstore, len(chunks)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Build/update the FAISS index.")
+    parser = argparse.ArgumentParser(description="Build/update the Chroma index.")
     parser.add_argument(
         "--rebuild",
         action="store_true",
@@ -64,8 +63,8 @@ def main():
     embeddings = get_embeddings()
     splitter = get_splitter()
 
-    if args.rebuild and os.path.exists(FAISS_INDEX_PATH):
-        shutil.rmtree(FAISS_INDEX_PATH)
+    if args.rebuild and os.path.exists(CHROMA_PATH):
+        shutil.rmtree(CHROMA_PATH)
         print("Rebuild: cleared existing index.")
 
     vectorstore = load_vectorstore(embeddings)
@@ -112,14 +111,14 @@ def main():
         print("Index is empty after ingestion (no embeddable content).")
         return
 
-    vectorstore.save_local(FAISS_INDEX_PATH)
+    # Chroma persists to disk on every write, so no explicit save is needed.
     save_manifest(manifest)
 
     print(
         f"\nDone. Files indexed: {len(manifest)} | "
         f"new/changed chunks this run: {total_new_chunks}"
     )
-    print(f"Index saved to {FAISS_INDEX_PATH}/ — commit it to deploy.")
+    print(f"Index saved to {CHROMA_PATH}/ — commit it to deploy.")
 
 
 if __name__ == "__main__":

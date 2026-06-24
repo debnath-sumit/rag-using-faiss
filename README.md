@@ -1,7 +1,7 @@
 # 📄 RAG Document Assistant
 
 A Retrieval-Augmented Generation (RAG) web app that answers questions from your
-PDF, TXT, and DOCX documents. Built with **Streamlit**, **LangChain**, **FAISS**,
+PDF, TXT, and DOCX documents. Built with **Streamlit**, **LangChain**, **ChromaDB**,
 local **HuggingFace embeddings**, and **Groq** (Llama 3.3 70B).
 
 Embeddings run **locally** (no API, no rate limits), and the corpus is embedded
@@ -22,10 +22,10 @@ it scale to many documents at zero cost.
   remove PDF/TXT/DOCX documents in the knowledge base. Regular users can ask
   questions freely.
 - **Offline ingestion, scales cheaply** — embed the whole corpus once with
-  `python ingest.py` (local model, no API cost), commit the FAISS index, and the
+  `python ingest.py` (local model, no API cost), commit the Chroma index, and the
   deployed app just loads it. Incremental: unchanged files are skipped, changed
   files re-embedded, deleted files removed — no full re-embed.
-- **Committed vector index** — `faiss_index/` is checked into the repo so it
+- **Committed vector index** — `chroma_db/` is checked into the repo so it
   survives Streamlit Cloud's ephemeral-disk redeploys.
 
 ---
@@ -59,11 +59,11 @@ it scale to many documents at zero cost.
    │    (bge-small-en-v1.5)   │                  │  • Q&A box (public)    │
    │  • manifest: skip/update │                  │  • Admin Panel (gated) │
    └────────────┬─────────────┘                  └───────────┬────────────┘
-                │ save_local                       embed query │ (bge-small)
+                │ auto-persist                     embed query │ (bge-small)
                 ▼                                               ▼
    ┌──────────────────────────┐   git commit     ┌────────────────────────┐
-   │   FAISS index            │ ───────────────▶ │   Retriever (top-k)    │
-   │   faiss_index/           │                  └───────────┬────────────┘
+   │   Chroma index           │ ───────────────▶ │   Retriever (top-k)    │
+   │   chroma_db/             │                  └───────────┬────────────┘
    │   + manifest.json        │                              │ context
    └──────────────────────────┘                              ▼
                                                   ┌────────────────────────┐
@@ -77,7 +77,7 @@ it scale to many documents at zero cost.
 
 ### Pipeline flow
 
-**Offline (run `python ingest.py` locally, then commit `faiss_index/`):**
+**Offline (run `python ingest.py` locally, then commit `chroma_db/`):**
 
 1. **Ingestion** — PDF/TXT/DOCX files in `information_storage/` are loaded
    (`PyPDFLoader` / `TextLoader` / `Docx2txtLoader`) and tagged with their
@@ -86,14 +86,14 @@ it scale to many documents at zero cost.
    (1000 chars, 100 overlap).
 3. **Embedding** — chunks are embedded **locally** with HuggingFace
    `BAAI/bge-small-en-v1.5` — no API calls, no rate limits, no cost.
-4. **Indexing** — vectors are stored in a **FAISS** index (`faiss_index/`)
+4. **Indexing** — vectors are stored in a **Chroma** index (`chroma_db/`)
    alongside a `manifest.json` that tracks each file's content hash and vector
    IDs. Re-running ingestion skips unchanged files, re-embeds changed ones, and
    drops vectors for deleted files — never a full re-embed.
 
 **Online (the deployed app):**
 
-5. **Load** — the app loads the prebuilt FAISS index read-only; the only thing
+5. **Load** — the app loads the prebuilt Chroma index read-only; the only thing
    it embeds at runtime is the user's question (one tiny, fast call).
 6. **Retrieval** — the retriever fetches the top-4 most relevant chunks.
 7. **Generation** — chunks + question go to **Groq Llama 3.3 70B**, which
@@ -113,7 +113,7 @@ it scale to many documents at zero cost.
 | Orchestration | LangChain |
 | Embeddings | HuggingFace `BAAI/bge-small-en-v1.5` (local, via sentence-transformers) |
 | LLM | Groq `llama-3.3-70b-versatile` |
-| Vector store | FAISS (CPU) |
+| Vector store | ChromaDB (local, SQLite-backed) |
 | Document loaders | PyPDFLoader, TextLoader, Docx2txtLoader |
 | Hosting | Streamlit Community Cloud |
 
@@ -145,7 +145,7 @@ Get a free Groq API key at https://console.groq.com.
 
 > **Adding documents:** drop files into `information_storage/`, run
 > `python ingest.py` (only new/changed files are embedded), then commit the
-> updated `faiss_index/`.
+> updated `chroma_db/`.
 
 ---
 
@@ -160,10 +160,10 @@ Get a free Groq API key at https://console.groq.com.
    ```
 4. Deploy.
 
-> ✅ **Durable index:** because `faiss_index/` is committed to the repo, the
+> ✅ **Durable index:** because `chroma_db/` is committed to the repo, the
 > deployed app loads the prebuilt index on every redeploy — no re-embedding, no
 > data loss. To update the knowledge base, run `python ingest.py` locally and
-> push the updated `faiss_index/`.
+> push the updated `chroma_db/`.
 >
 > ⚠️ **Note:** documents uploaded through the Admin Panel at runtime still live
 > on Streamlit Cloud's ephemeral disk and won't persist across restarts. The
@@ -176,11 +176,11 @@ Get a free Groq API key at https://console.groq.com.
 ```
 rag-using-faiss/
 ├── rag_ui_app.py          # Main Streamlit app (deployed) — loads index, serves Q&A
-├── ingest.py              # Offline ingester — builds/updates faiss_index/
+├── ingest.py              # Offline ingester — builds/updates chroma_db/
 ├── rag_core.py            # Shared building blocks (embeddings, loaders, manifest)
 ├── rag_txt_app.py         # CLI version (terminal Q&A loop)
 ├── information_storage/    # Source PDF/TXT/DOCX documents
-├── faiss_index/            # Prebuilt FAISS index + manifest.json (committed)
+├── chroma_db/              # Prebuilt Chroma index + manifest.json (committed)
 ├── requirements.txt        # pip dependencies
 ├── pyproject.toml          # uv/project dependencies
 └── README.md

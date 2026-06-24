@@ -6,6 +6,9 @@ sentence-transformers
 langchain-community
 langchain-text-splitters
 langchain-core
-faiss-cpu
+langchain-chroma
+# chromadb pulls opentelemetry; pin the OTLP exporter up so it ships protobuf-6+
+# compatible generated code (older 1.11.1 breaks on protobuf 7).
+opentelemetry-exporter-otlp-proto-grpc>=1.42.1
 pypdf
 docx2txt

@@ -15,6 +15,6 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 
-# NOTE: faiss_index/ is committed on purpose — it's the prebuilt index the
+# NOTE: chroma_db/ is committed on purpose — it's the prebuilt index the
 # deployed app loads (Streamlit Cloud disk is ephemeral). Rebuild it with
 # `python ingest.py` and commit the result.
