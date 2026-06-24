@@ -1,4 +1,0 @@
-Sumit is a QA/SDET engineer.
-He has experience with Selenium, Playwright, API testing, Python, Pytest, Java, Cucumber, and CI/CD.
-He is preparing for QA automation interviews.
-He wants simple English explanations with practical interview-style answers.
